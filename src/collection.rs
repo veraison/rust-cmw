@@ -3,11 +3,19 @@
 
 //! Collection CMW: map of keys → nested CMW, with optional "__cmwc_t" type.
 
-use crate::{cmw::Kind, utils::validate_collection_type, CMW};
-use mime::Mime;
-use minicbor::{data::Type, encode::Write, Decoder, Encode, Encoder};
+use crate::{
+    cmw::{Error, Kind},
+    CMW,
+};
+use iri_string::types::UriStr;
+use minicbor::{data::Type as CborType, encode::Write, Decoder, Encode, Encoder};
+use regex::Regex;
 use serde_json::{Map as JsonMap, Value as JsonValue};
-use std::{collections::BTreeMap, fmt, str::FromStr};
+use std::{
+    collections::BTreeMap,
+    fmt::{self, Display},
+    str::FromStr,
+};
 
 /// Format enum: JSON/CBOR record, collection, or CBOR Tag.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,21 +57,58 @@ pub struct Meta {
     pub kind: Kind,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Type(String);
+
+impl Type {
+    pub fn new<S: Into<String>>(s: S) -> Result<Self, Error> {
+        let s = s.into();
+        Self::validate(&s)?;
+        Ok(Type(s))
+    }
+
+    /// Validate collection type: must be a URI or an absolute OID.
+    fn validate(s: &str) -> Result<(), Error> {
+        let oid_re = Regex::new(r"^([0-2])(([.]0)|([.][1-9][0-9]*))*$").unwrap();
+
+        if oid_re.is_match(s) {
+            return Ok(());
+        }
+        if UriStr::new(s).is_ok() {
+            return Ok(());
+        }
+        Err(Error::InvalidData(format!(
+            "invalid collection type: {:?}. MUST be URI or OID",
+            s
+        )))
+    }
+}
+
+impl Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for Type {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s)
+    }
+}
+
 /// The Collection structure.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Collection {
     cmap: BTreeMap<Label, CMW>,
-    ctyp: Option<Mime>,
+    ctyp: Option<Type>,
     pub(crate) format: Option<Format>,
 }
 
 impl Collection {
     /// Create new collection with optional type.
-    pub fn new(ctyp: Option<Mime>, format: Option<Format>) -> Result<Self, String> {
-        if let Some(mt) = &ctyp {
-            validate_collection_type(mt.as_ref())?;
-        }
-
+    pub fn new(ctyp: Option<Type>, format: Option<Format>) -> Result<Self, String> {
         Ok(Collection {
             cmap: BTreeMap::new(),
             ctyp,
@@ -71,7 +116,7 @@ impl Collection {
         })
     }
 
-    pub fn get_type(&self) -> Option<&Mime> {
+    pub fn get_type(&self) -> Option<&Type> {
         self.ctyp.as_ref()
     }
 
@@ -142,7 +187,11 @@ impl Collection {
                 let vb = v
                     .marshal_json()
                     .map_err(|e| format!("serializing nested CMW: {}", e))?;
-                map.insert(kstr.clone(), vb.into());
+                let val = JsonValue::String(
+                    String::from_utf8(vb)
+                        .map_err(|e| format!("converting nested CMW bytes to string: {}", e))?,
+                );
+                map.insert(kstr.clone(), val);
             } else {
                 return Err("JSON collection, key error: want string".into());
             }
@@ -161,9 +210,8 @@ impl Collection {
         for (key, val) in obj {
             if key == "__cmwc_t" {
                 if let JsonValue::String(s) = val {
-                    validate_collection_type(s)?;
                     col.ctyp = Some(
-                        Mime::from_str(s)
+                        Type::from_str(s)
                             .map_err(|e| format!("Could not parse CMW type as media type: {e}"))?,
                     );
                     continue;
@@ -171,11 +219,12 @@ impl Collection {
                     return Err("invalid JSON collection type".into());
                 }
             }
-            let ser =
-                serde_json::to_vec(val).map_err(|e| format!("re-serializing nested JSON: {e}"))?;
-            let nested =
-                CMW::unmarshal_json(&ser).map_err(|e| format!("unmarshaling nested CMW: {e}"))?;
-            col.cmap.insert(Label::Str(key.clone()), nested);
+            if let JsonValue::String(s) = val {
+                let cmw = CMW::unmarshal_json(s.as_bytes())
+                    .map_err(|e| format!("unmarshaling nested CMW: {e}"))?;
+                col.cmap.insert(Label::Str(key.clone()), cmw);
+                continue;
+            }
         }
         col.format = Some(Format::Json);
         Ok(col)
@@ -203,7 +252,7 @@ impl Collection {
                 .str("__cmwc_t")
                 .or(Err("serializing CBOR collection type".to_string()))?;
             encoder
-                .str(c.as_ref())
+                .str(&c.to_string())
                 .or(Err("serializing CBOR collection type".to_string()))?;
         }
         for (k, v) in &self.cmap {
@@ -233,13 +282,13 @@ impl Collection {
             .map()
             .map_err(|e| format!("decoding collection map: {e}"))?;
         loop {
-            let key_type: Type = match decoder.datatype() {
+            let key_type: CborType = match decoder.datatype() {
                 Ok(t) => t,
                 Err(e) if e.is_end_of_input() => break,
                 Err(e) => return Err(format!("decoding collection key type: {e}")),
             };
             match key_type {
-                Type::String => {
+                CborType::String => {
                     let ks = decoder
                         .str()
                         .map_err(|e| format!("decoding CBOR string key: {e}"))?;
@@ -248,10 +297,8 @@ impl Collection {
                         let collection_type = decoder
                             .str()
                             .map_err(|e| format!("decoding CBOR collection type: {e}"))?;
-                        // Check if the collection type is a valid MIME type.
-                        validate_collection_type(collection_type)?;
                         col.ctyp =
-                            Some(Mime::from_str(collection_type).map_err(|e| {
+                            Some(Type::from_str(collection_type).map_err(|e| {
                                 format!("Could not parse CMW type as media type: {e}")
                             })?);
                         continue;
@@ -262,15 +309,15 @@ impl Collection {
                         .map_err(|e| format!("decoding CBOR nested CMW: {e}"))?;
                     col.cmap.insert(Label::Str(ks.to_string()), nested);
                 }
-                Type::Int
-                | Type::I16
-                | Type::I32
-                | Type::I64
-                | Type::I8
-                | Type::U16
-                | Type::U32
-                | Type::U64
-                | Type::U8 => {
+                CborType::Int
+                | CborType::I16
+                | CborType::I32
+                | CborType::I64
+                | CborType::I8
+                | CborType::U16
+                | CborType::U32
+                | CborType::U64
+                | CborType::U8 => {
                     let ui = decoder
                         .u64()
                         .map_err(|e| format!("decoding CBOR uint key: {e}"))?;
@@ -289,5 +336,143 @@ impl Collection {
         }
         col.format = Some(Format::Cbor);
         Ok(col)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{cmw::CMW, monad::Monad};
+    use std::str::FromStr;
+
+    // Helper: create a dummy CMW instance wrapping a Monad.
+    fn dummy_cmw() -> CMW {
+        // Using new_cf as in your tests, with dummy data.
+        Monad::new_cf(30001, vec![0x01, 0x02, 0x03], None)
+            .expect("Failed to create dummy Monad")
+            .into()
+    }
+
+    #[test]
+    fn test_validate_collection_type() {
+        Type::validate("tag:example.com,2024:composite-attester").unwrap();
+        assert!(Type::validate("urn:ietf:rfc:rfc9999").is_ok());
+        assert!(Type::validate("http://www.ietf.org/rfc/rfc2396.txt").is_ok());
+        assert!(Type::validate("1.2.3.4").is_ok());
+        assert!(Type::validate("").is_err());
+        assert!(Type::validate("a/b/c").is_err());
+        assert!(Type::validate(".2.3.4").is_err());
+    }
+
+    #[test]
+    fn test_new_collection_no_type() {
+        let collection = Collection::new(None, Some(Format::Json))
+            .expect("Failed to create collection without type");
+        assert!(collection.get_type().is_none());
+    }
+
+    #[test]
+    fn test_new_collection_with_valid_type() {
+        let type_str = "tag:example.com,2024:composite-attester";
+        let type_ = Type::from_str(type_str).expect("Failed to parse type");
+        let collection = Collection::new(Some(type_.clone()), Some(Format::Cbor))
+            .expect("Failed to create collection with type");
+        assert_eq!(collection.get_type(), Some(&type_));
+    }
+
+    #[test]
+    fn test_add_and_get_item() {
+        let mut collection =
+            Collection::new(None, Some(Format::Json)).expect("Failed to create collection");
+        let key = Label::Str("test".to_string());
+        let cmw_item = dummy_cmw();
+        collection
+            .add_item(key.clone(), cmw_item.clone())
+            .expect("Failed to add item");
+        let retrieved = collection.get_item(&key);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap(), &cmw_item);
+    }
+
+    #[test]
+    fn test_validate_empty_collection() {
+        let collection =
+            Collection::new(None, Some(Format::Json)).expect("Failed to create collection");
+        let result = collection.validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_meta_sorted() {
+        let mut collection =
+            Collection::new(None, Some(Format::Cbor)).expect("Failed to create collection");
+        // Add items with keys in non-sorted order.
+        let key1 = Label::Str("b_key".to_string());
+        let key2 = Label::Str("a_key".to_string());
+        collection
+            .add_item(key1, dummy_cmw())
+            .expect("Failed to add item");
+        collection
+            .add_item(key2, dummy_cmw())
+            .expect("Failed to add item");
+        let meta = collection.get_meta();
+        assert_eq!(meta.len(), 2);
+        // Meta should be sorted (by key display).
+        let first_key = match &meta[0].key {
+            Label::Str(s) => s,
+            _ => "",
+        };
+        assert_eq!(first_key, "a_key");
+    }
+
+    #[test]
+    fn test_json_roundtrip() {
+        let type_str = "tag:example.com,2024:composite-attester";
+        let type_ = Type::from_str(type_str).expect("Failed to parse type");
+        let mut collection =
+            Collection::new(Some(type_), Some(Format::Json)).expect("Failed to create collection");
+        collection
+            .add_item(Label::Str("item1".to_string()), dummy_cmw())
+            .expect("Failed to add item");
+        // Marshal the collection to JSON bytes.
+        let json_bytes = collection
+            .marshal_json()
+            .expect("Failed to marshal collection to JSON");
+        let json_str =
+            String::from_utf8(json_bytes.clone()).expect("Failed to convert JSON bytes to string");
+
+        let serde_bytes = collection
+            .marshal_json()
+            .expect("Failed to marshal collection to JSON");
+        let serde_str =
+            String::from_utf8(serde_bytes).expect("Failed to convert serde JSON bytes to string");
+        println!("JSON Output: {}", json_str);
+        println!("Serde JSON Output: {}", serde_str);
+        // Unmarshal the JSON bytes back into a collection.
+        let collection2 = Collection::unmarshal_json(&json_bytes)
+            .expect("Failed to unmarshal JSON into collection");
+        assert_eq!(collection, collection2);
+    }
+
+    #[test]
+    fn test_cbor_roundtrip() {
+        let type_str = "tag:example.com,2024:composite-attester";
+        let type_ = Type::from_str(type_str).expect("Failed to parse type");
+        let mut collection =
+            Collection::new(Some(type_), Some(Format::Cbor)).expect("Failed to create collection");
+        collection
+            .add_item(Label::Str("item1".to_string()), dummy_cmw())
+            .expect("Failed to add item");
+        collection
+            .add_item(Label::Uint(42), dummy_cmw())
+            .expect("Failed to add item");
+        // Marshal the collection to CBOR bytes.
+        let cbor_bytes = collection
+            .marshal_cbor()
+            .expect("Failed to marshal collection to CBOR");
+        // Unmarshal the CBOR bytes back into a collection.
+        let collection2 = Collection::unmarshal_cbor(&cbor_bytes)
+            .expect("Failed to unmarshal CBOR into collection");
+        assert_eq!(collection, collection2);
     }
 }

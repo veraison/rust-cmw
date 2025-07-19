@@ -38,12 +38,18 @@ impl fmt::Display for Format {
 }
 
 /// Internal monad structure.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Monad {
     typ: Type,
     val: Value,
     ind: Option<Indicator>,
     pub(crate) format: Option<Format>,
+}
+
+impl PartialEq for Monad {
+    fn eq(&self, other: &Self) -> bool {
+        self.typ == other.typ && self.val == other.val && self.ind == other.ind
+    }
 }
 
 impl Monad {

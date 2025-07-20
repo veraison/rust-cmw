@@ -14,7 +14,9 @@ pub mod utils;
 pub mod value;
 pub mod x509_ext;
 
-pub use cmw::{Kind, CMW};
+pub use cmw::{Error, Kind, CMW};
+pub use collection::Collection;
 pub use indicator::Indicator;
 pub use mime::Mime;
+pub use monad::Monad;
 pub use r#type::Type;

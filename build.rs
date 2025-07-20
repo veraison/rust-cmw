@@ -1,4 +1,6 @@
-// build.rs
+// Copyright 2025 Contributors to the Veraison project.
+// SPDX-License-Identifier: Apache-2.0
+
 use std::env;
 use std::fs::File;
 use std::io::{BufWriter, Write};

@@ -1,16 +1,18 @@
 // Copyright 2025 Contributors to the Veraison project.
 // SPDX-License-Identifier: Apache-2.0
 
-//! TN/CF conversion as per RFC 9277 (CoAP ↔ CBOR Tag mapping).
+//! CBOR Tag Number (TN)/Content Format (CF) conversion as per RFC 9277 (CoAP ↔ CBOR Tag mapping).
 
-use thiserror::Error;
+use thiserror::Error as ThisError;
+
+use crate::cmw::Error;
 
 const CF_MAX: u16 = 65024;
 const TN_MIN: u64 = 1668546817;
 const TN_MAX: u64 = 1668612095;
 
-#[derive(Debug, Error)]
-pub enum TnError {
+#[derive(Debug, ThisError)]
+pub enum TnCfError {
     #[error("C-F ID {0} out of range")]
     CfOutOfRange(u16),
     #[error("TN {0} out of range")]
@@ -18,18 +20,18 @@ pub enum TnError {
 }
 
 /// Compute CBOR Tag number from CoAP Content‐Format ID.
-pub fn tn(cf: u16) -> Result<u64, TnError> {
+pub fn tn(cf: u16) -> Result<u64, Error> {
     if cf > CF_MAX {
-        return Err(TnError::CfOutOfRange(cf));
+        return Err(Error::TnCf(TnCfError::CfOutOfRange(cf)));
     }
     let cf64 = cf as u64;
     Ok(TN_MIN + (cf64 / 255) * 256 + (cf64 % 255))
 }
 
 /// Compute CoAP Content‐Format ID from CBOR Tag number.
-pub fn cf(tn: u64) -> Result<u16, TnError> {
+pub fn cf(tn: u64) -> Result<u16, Error> {
     if !(TN_MIN..=TN_MAX).contains(&tn) {
-        return Err(TnError::TnOutOfRange(tn));
+        return Err(TnCfError::TnOutOfRange(tn).into());
     }
     let delta = tn - TN_MIN;
     let cf_calc = ((delta / 256) * 255) + (delta % 256);

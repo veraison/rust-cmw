@@ -3,16 +3,16 @@
 
 //! X.509 Extension encoding/decoding of wrapped CMW (OID 1.3.6.1.5.5.7.1.35).
 
-use crate::cmw::CMW;
+use crate::cmw::{Error, CMW};
 use lazy_static::lazy_static;
 use simple_asn1::{from_der, oid, to_der, ASN1Block, OID};
-use thiserror::Error;
+use thiserror::Error as ThisError;
 
 lazy_static! {
     pub static ref OID_EXT_CMW: OID = oid!(1, 3, 6, 1, 5, 5, 7, 1, 35);
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, ThisError)]
 pub enum X509Error {
     #[error("ASN.1 encoding failed: {0}")]
     Asn1Encode(String),
@@ -22,9 +22,6 @@ pub enum X509Error {
 
     #[error("Invalid extension OID: expected id-pe-cmw, got {0}")]
     InvalidOid(String),
-
-    #[error("CMW (de)serialization failed: {0}")]
-    CmwError(String),
 }
 
 /// Representation of a minimal X.509 Extension.
@@ -44,10 +41,8 @@ impl X509Extension {
         }
     }
 
-    pub fn marshal_cbor(cmw: &CMW, critical: bool) -> Result<Self, X509Error> {
-        let serialized_cmw = cmw
-            .marshal_cbor()
-            .map_err(|e| X509Error::CmwError(format!("Failed to marshal CMW to CBOR: {e}")))?;
+    pub fn marshal_cbor(cmw: &CMW, critical: bool) -> Result<Self, Error> {
+        let serialized_cmw = cmw.marshal_cbor()?;
 
         let wrapped = ASN1Block::OctetString(0, serialized_cmw.clone());
 
@@ -69,13 +64,11 @@ impl X509Extension {
         })
     }
 
-    pub fn marshal_json(cmw: &CMW, critical: bool) -> Result<Self, X509Error> {
-        let serialized_cmw = cmw
-            .marshal_json()
-            .map_err(|e| X509Error::CmwError(format!("Failed to marshal CMW to JSON: {e}")))?;
+    pub fn marshal_json(cmw: &CMW, critical: bool) -> Result<Self, Error> {
+        let serialized_cmw = cmw.marshal_json()?;
 
         let s = String::from_utf8(serialized_cmw.clone())
-            .map_err(|e| X509Error::CmwError(format!("Failed to parse JSON CMW as UTF-8: {e}")))?;
+            .map_err(|e| Error::Unexpected(format!("Failed to parse JSON CMW as UTF-8: {e}")))?;
         let wrapped = ASN1Block::UTF8String(0, s);
 
         // Build the sequence: SEQUENCE { OID, wrapped }
@@ -97,14 +90,14 @@ impl X509Extension {
     }
 
     /// Decode CMW from a provided X.509 Extension.
-    pub fn decode_cmw(ext: &X509Extension) -> Result<CMW, X509Error> {
+    pub fn decode_cmw(ext: &X509Extension) -> Result<CMW, Error> {
         if ext.oid != *OID_EXT_CMW {
-            return Err(X509Error::InvalidOid(format!("{:?}", ext.oid)));
+            return Err(X509Error::InvalidOid(format!("{:?}", ext.oid)).into());
         }
         let blocks = from_der(&ext.value)
             .map_err(|e| X509Error::Asn1Decode(format!("Failed to generate DER: {}", e)))?;
         if blocks.is_empty() {
-            return Err(X509Error::Asn1Decode("Extension is empty".to_string()));
+            return Err(X509Error::Asn1Decode("Extension is empty".to_string()).into());
         }
         // Expect SEQUENCE of length 3
         if let ASN1Block::Sequence(_, ref items) = blocks[0] {
@@ -112,26 +105,17 @@ impl X509Extension {
                 return Err(X509Error::Asn1Decode(format!(
                     "Sequence has wrong length: {}",
                     items.len()
-                )));
+                ))
+                .into());
             }
             // items[2] is either OCTET STRING or UTF8String
             match &items[2] {
-                ASN1Block::OctetString(_, bytes) => {
-                    Ok(CMW::unmarshal_cbor(bytes).map_err(X509Error::CmwError)?)
-                }
-                ASN1Block::UTF8String(_, s) => {
-                    Ok(CMW::unmarshal_json(s.as_bytes()).map_err(X509Error::CmwError)?)
-                }
-                _ => Err(X509Error::Asn1Decode(format!(
-                    "Wrong item type: {:?}",
-                    items[2]
-                ))),
+                ASN1Block::OctetString(_, bytes) => Ok(CMW::unmarshal_cbor(bytes)?),
+                ASN1Block::UTF8String(_, s) => Ok(CMW::unmarshal_json(s.as_bytes())?),
+                _ => Err(X509Error::Asn1Decode(format!("Wrong item type: {:?}", items[2])).into()),
             }
         } else {
-            Err(X509Error::Asn1Decode(format!(
-                "Wrong element type: {:?}",
-                blocks[0]
-            )))
+            Err(X509Error::Asn1Decode(format!("Wrong element type: {:?}", blocks[0])).into())
         }
     }
 }

@@ -4,16 +4,18 @@
 //! Value wrapper around a byte vector, with base64‐URL‐safe JSON <-> byte[] mapping.
 
 use base64::Engine;
-use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_cbor::{de::from_slice as cbor_from_slice, ser::to_vec as cbor_to_vec};
+
+use crate::cmw::Error;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Value(pub(crate) Vec<u8>);
 
 impl Value {
-    pub fn new(bytes: Vec<u8>) -> Result<Self, &'static str> {
+    pub fn new(bytes: Vec<u8>) -> Result<Self, Error> {
         if bytes.is_empty() {
-            Err("empty value")
+            Err(Error::InvalidData("empty value".into()))
         } else {
             Ok(Value(bytes))
         }
@@ -54,15 +56,19 @@ impl<'de> Deserialize<'de> for Value {
 
 impl Value {
     /// Helper to produce CBOR‐serialized value (raw bytes).
-    pub fn to_cbor_bytes(&self) -> Result<Vec<u8>, serde_cbor::Error> {
+    pub fn to_cbor_bytes(&self) -> Result<Vec<u8>, Error> {
         cbor_to_vec(&serde_cbor::Value::Bytes(self.0.clone()))
+            .map_err(|e| Error::CborEncode(format!("Failed to encode Value to CBOR: {e}")))
     }
 
     /// Helper to decode CBOR raw bytes into Value.
-    pub fn from_cbor_bytes(b: &[u8]) -> Result<Self, serde_cbor::Error> {
-        match cbor_from_slice::<serde_cbor::Value>(b)? {
-            serde_cbor::Value::Bytes(v) if !v.is_empty() => Ok(Value(v)),
-            _ => Err(serde_cbor::Error::custom("cannot decode value")),
+    pub fn from_cbor_bytes(b: &[u8]) -> Result<Self, Error> {
+        match cbor_from_slice::<serde_cbor::Value>(b) {
+            Ok(serde_cbor::Value::Bytes(v)) if !v.is_empty() => Ok(Value(v)),
+            Err(e) => Err(Error::CborDecode(format!(
+                "Failed to decode Value from CBOR: {e}"
+            ))),
+            _ => Err(Error::CborDecode("got wrong CBOR type".into())),
         }
     }
 }

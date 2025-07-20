@@ -35,7 +35,7 @@ fn test_encode_cbor_collection() {
     let data = fs::read("testdata/collection-cbor-ok.cbor")
         .expect("Failed to read testdata/collection-cbor-ok.cbor");
 
-    let cmw_1 = Monad::new(
+    let cmw_1 = Monad::new_media_type(
         Mime::from_str("application/signed-corim+cbor")
             .expect("Failed to create media type for CMW 1"),
         vec![0xd2, 0x84, 0x43, 0xa1, 0x01, 0x26, 0xa1],

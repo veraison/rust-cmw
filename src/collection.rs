@@ -108,7 +108,7 @@ pub struct Collection {
 
 impl Collection {
     /// Create new collection with optional type.
-    pub fn new(ctyp: Option<Type>, format: Option<Format>) -> Result<Self, String> {
+    pub fn new(ctyp: Option<Type>, format: Option<Format>) -> Result<Self, Error> {
         Ok(Collection {
             cmap: BTreeMap::new(),
             ctyp,
@@ -120,15 +120,19 @@ impl Collection {
         self.ctyp.as_ref()
     }
 
-    pub fn add_item(&mut self, key: Label, node: CMW) -> Result<(), String> {
+    pub fn add_item(&mut self, key: Label, node: CMW) -> Result<(), Error> {
         // Validate key (string must not be "__cmwc_t" or empty/whitespace).
         match &key {
             Label::Str(s) => {
                 if s.trim().is_empty() {
-                    return Err("bad collection key: empty or whitespace only".into());
+                    return Err(Error::InvalidData(
+                        "bad collection key: empty or whitespace only".into(),
+                    ));
                 }
                 if s == "__cmwc_t" {
-                    return Err("bad collection key: __cmwc_t is reserved".into());
+                    return Err(Error::InvalidData(
+                        "bad collection key: __cmwc_t is reserved".into(),
+                    ));
                 }
             }
             Label::Uint(_) => {}
@@ -141,13 +145,16 @@ impl Collection {
         self.cmap.get(key)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), Error> {
         if self.cmap.is_empty() {
-            return Err("empty CMW collection".into());
+            return Err(Error::InvalidData("empty CMW collection".into()));
         }
         for (k, v) in &self.cmap {
             if let Err(e) = v.validate() {
-                return Err(format!("invalid collection at key {:?}: {}", k, e));
+                return Err(Error::InvalidData(format!(
+                    "invalid collection at key {:?}: {}",
+                    k, e
+                )));
             }
         }
         Ok(())
@@ -177,51 +184,45 @@ impl Collection {
     }
 
     /// Serialize as JSON: object with string keys.
-    pub fn marshal_json(&self) -> Result<Vec<u8>, String> {
+    pub fn marshal_json(&self) -> Result<Vec<u8>, Error> {
         let mut map: JsonMap<String, JsonValue> = JsonMap::new();
         if let Some(ref c) = self.ctyp {
             map.insert("__cmwc_t".into(), JsonValue::String(c.to_string()));
         }
         for (k, v) in &self.cmap {
             if let Label::Str(kstr) = k {
-                let vb = v
-                    .marshal_json()
-                    .map_err(|e| format!("serializing nested CMW: {}", e))?;
-                let val = JsonValue::String(
-                    String::from_utf8(vb)
-                        .map_err(|e| format!("converting nested CMW bytes to string: {}", e))?,
-                );
+                let vb = v.marshal_json()?;
+                let val = JsonValue::String(String::from_utf8(vb).map_err(|e| {
+                    Error::Unexpected(format!("converting nested CMW bytes to string: {}", e))
+                })?);
                 map.insert(kstr.clone(), val);
             } else {
-                return Err("JSON collection, key error: want string".into());
+                return Err(Error::InvalidData(
+                    "JSON collection, key error: want string".into(),
+                ));
             }
         }
-        serde_json::to_vec(&map).map_err(|e| format!("marshaling JSON collection: {}", e))
+        serde_json::to_vec(&map).map_err(Error::Json)
     }
 
     /// Deserialize from JSON bytes.
-    pub fn unmarshal_json(b: &[u8]) -> Result<Self, String> {
-        let raw: JsonValue =
-            serde_json::from_slice(b).map_err(|e| format!("unmarshaling JSON collection: {e}"))?;
+    pub fn unmarshal_json(b: &[u8]) -> Result<Self, Error> {
+        let raw: JsonValue = serde_json::from_slice(b).map_err(Error::Json)?;
         let obj = raw
             .as_object()
-            .ok_or_else(|| "want JSON object start".to_string())?;
+            .ok_or_else(|| Error::InvalidData("want JSON object start".to_string()))?;
         let mut col = Collection::new(None, None)?;
         for (key, val) in obj {
             if key == "__cmwc_t" {
                 if let JsonValue::String(s) = val {
-                    col.ctyp = Some(
-                        Type::from_str(s)
-                            .map_err(|e| format!("Could not parse CMW type as media type: {e}"))?,
-                    );
+                    col.ctyp = Some(Type::from_str(s)?);
                     continue;
                 } else {
-                    return Err("invalid JSON collection type".into());
+                    return Err(Error::InvalidData("invalid JSON collection type".into()));
                 }
             }
             if let JsonValue::String(s) = val {
-                let cmw = CMW::unmarshal_json(s.as_bytes())
-                    .map_err(|e| format!("unmarshaling nested CMW: {e}"))?;
+                let cmw = CMW::unmarshal_json(s.as_bytes())?;
                 col.cmap.insert(Label::Str(key.clone()), cmw);
                 continue;
             }
@@ -231,82 +232,82 @@ impl Collection {
     }
 
     /// Serialize as CBOR: map with string/u64 keys.
-    pub fn marshal_cbor(&self) -> Result<Vec<u8>, String> {
+    pub fn marshal_cbor(&self) -> Result<Vec<u8>, Error> {
         let buf = Vec::new();
         let mut encoder = Encoder::new(buf);
-        self.marshal_cbor_to_encoder(&mut encoder)
-            .map_err(|e| format!("marshaling CBOR collection: {e}"))?;
+        self.marshal_cbor_to_encoder(&mut encoder)?;
         Ok(encoder.into_writer())
     }
 
     pub(crate) fn marshal_cbor_to_encoder<W: Write>(
         &self,
         encoder: &mut Encoder<W>,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let meta = self.get_meta();
-        let _ = encoder
-            .map(meta.len() as u64)
-            .or(Err("starting CBOR collection map".to_string()))?;
+        let _ = encoder.map(meta.len() as u64).or(Err(Error::CborEncode(
+            "starting CBOR collection map".to_string(),
+        )))?;
         if let Some(ref c) = self.ctyp {
-            encoder
-                .str("__cmwc_t")
-                .or(Err("serializing CBOR collection type".to_string()))?;
-            encoder
-                .str(&c.to_string())
-                .or(Err("serializing CBOR collection type".to_string()))?;
+            encoder.str("__cmwc_t").or(Err(Error::CborEncode(
+                "serializing CBOR collection type".to_string(),
+            )))?;
+            encoder.str(&c.to_string()).or(Err(Error::CborEncode(
+                "serializing CBOR collection type".to_string(),
+            )))?;
         }
         for (k, v) in &self.cmap {
             match k {
-                Label::Str(s) => encoder
-                    .str(s)
-                    .or(Err("serializing a collection key (string)".to_string()))?,
-                Label::Uint(u) => encoder
-                    .u64(*u)
-                    .or(Err("serializing a collection key (int)".to_string()))?,
+                Label::Str(s) => encoder.str(s).or(Err(Error::CborEncode(
+                    "serializing a collection key (string)".to_string(),
+                )))?,
+                Label::Uint(u) => encoder.u64(*u).or(Err(Error::CborEncode(
+                    "serializing a collection key (int)".to_string(),
+                )))?,
             };
             v.encode(encoder, &mut ())
-                .or(Err("serializing nested CMW".to_string()))?;
+                .or(Err(Error::CborEncode("serializing nested CMW".to_string())))?;
         }
         Ok(())
     }
 
     /// Deserialize from CBOR bytes.
-    pub fn unmarshal_cbor(b: &[u8]) -> Result<Self, String> {
+    pub fn unmarshal_cbor(b: &[u8]) -> Result<Self, Error> {
         let mut decoder = Decoder::new(b);
         Collection::unmarshal_from_decoder(&mut decoder)
     }
 
-    pub(crate) fn unmarshal_from_decoder(decoder: &mut Decoder<'_>) -> Result<Self, String> {
+    pub(crate) fn unmarshal_from_decoder(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         let mut col = Collection::new(None, None)?;
         let _ = decoder
             .map()
-            .map_err(|e| format!("decoding collection map: {e}"))?;
+            .map_err(|e| Error::CborDecode(format!("decoding collection map: {e}")))?;
         loop {
             let key_type: CborType = match decoder.datatype() {
                 Ok(t) => t,
                 Err(e) if e.is_end_of_input() => break,
-                Err(e) => return Err(format!("decoding collection key type: {e}")),
+                Err(e) => {
+                    return Err(Error::InvalidData(format!(
+                        "decoding collection key type: {e}"
+                    )))
+                }
             };
             match key_type {
                 CborType::String => {
                     let ks = decoder
                         .str()
-                        .map_err(|e| format!("decoding CBOR string key: {e}"))?;
+                        .map_err(|e| Error::CborDecode(format!("decoding CBOR string key: {e}")))?;
 
                     if ks == "__cmwc_t" {
-                        let collection_type = decoder
-                            .str()
-                            .map_err(|e| format!("decoding CBOR collection type: {e}"))?;
-                        col.ctyp =
-                            Some(Type::from_str(collection_type).map_err(|e| {
-                                format!("Could not parse CMW type as media type: {e}")
-                            })?);
+                        let collection_type = decoder.str().map_err(|e| {
+                            Error::CborDecode(format!("decoding CBOR collection type: {e}"))
+                        })?;
+                        col.ctyp = Some(Type::from_str(collection_type)?);
                         continue;
                     }
 
                     let nested = decoder
                         .decode()
-                        .map_err(|e| format!("decoding CBOR nested CMW: {e}"))?;
+                        .map_err(|e| Error::CborDecode(format!("decoding CBOR nested CMW: {e}")))?;
                     col.cmap.insert(Label::Str(ks.to_string()), nested);
                 }
                 CborType::Int
@@ -320,17 +321,17 @@ impl Collection {
                 | CborType::U8 => {
                     let ui = decoder
                         .u64()
-                        .map_err(|e| format!("decoding CBOR uint key: {e}"))?;
+                        .map_err(|e| Error::CborDecode(format!("decoding CBOR uint key: {e}")))?;
                     let nested = decoder
                         .decode()
-                        .map_err(|e| format!("decoding CBOR nested CMW: {e}"))?;
+                        .map_err(|e| Error::CborDecode(format!("decoding CBOR nested CMW: {e}")))?;
                     col.cmap.insert(Label::Uint(ui), nested);
                 }
                 _ => {
-                    return Err(format!(
+                    return Err(Error::InvalidData(format!(
                         "unknown collection key type: want string or uint: {:?}",
                         key_type
-                    ))
+                    )))
                 }
             }
         }
@@ -438,16 +439,6 @@ mod tests {
         let json_bytes = collection
             .marshal_json()
             .expect("Failed to marshal collection to JSON");
-        let json_str =
-            String::from_utf8(json_bytes.clone()).expect("Failed to convert JSON bytes to string");
-
-        let serde_bytes = collection
-            .marshal_json()
-            .expect("Failed to marshal collection to JSON");
-        let serde_str =
-            String::from_utf8(serde_bytes).expect("Failed to convert serde JSON bytes to string");
-        println!("JSON Output: {}", json_str);
-        println!("Serde JSON Output: {}", serde_str);
         // Unmarshal the JSON bytes back into a collection.
         let collection2 = Collection::unmarshal_json(&json_bytes)
             .expect("Failed to unmarshal JSON into collection");

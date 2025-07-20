@@ -5,13 +5,14 @@
 //! and TN/CF mapping.
 
 use crate::cfmap::{CF_TO_MT, MT_TO_CF};
+use crate::cmw::Error;
 use crate::tn::{cf, tn};
 use mime::Mime;
 use minicbor::data::Tag;
 use minicbor::encode::Write;
 use minicbor::Encoder;
 use serde::{
-    de::{Error, Unexpected},
+    de::{Error as DeError, Unexpected},
     Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::fmt;
@@ -32,25 +33,25 @@ pub enum Type {
 
 impl Type {
     /// Compute CBOR Tag number from stored type.
-    pub fn tag_number(&self) -> Result<u64, String> {
+    pub fn tag_number(&self) -> Result<u64, Error> {
         match self {
             Type::Media(s) => {
                 if let Some(&cf) = MT_TO_CF.get(s.as_ref()) {
-                    tn(cf).map_err(|e| e.to_string())
+                    tn(cf)
                 } else {
-                    Err(format!(
+                    Err(Error::InvalidData(format!(
                         "media type {s:?} has no registered CoAP Content-Format"
-                    ))
+                    )))
                 }
             }
-            Type::CfNum(cf) => tn(*cf).map_err(|e| e.to_string()),
+            Type::CfNum(cf) => tn(*cf),
             Type::TagNum(tn) => Ok(*tn),
         }
     }
 
     /// Convert an integer (uint64) from CBOR Tag into internal Type. We attempt CF back‐mapping.
-    pub fn from_tag(tn: u64) -> Result<Self, String> {
-        let cf = cf(tn).map_err(|e| e.to_string())?;
+    pub fn from_tag(tn: u64) -> Result<Self, Error> {
+        let cf = cf(tn)?;
         if let Some(&mt) = CF_TO_MT.get(&cf) {
             Ok(Type::Media(Mime::from_str(mt).unwrap())) // unwrap is ok since we control CF_TO_MT and all types should be correct
         } else {
@@ -58,22 +59,22 @@ impl Type {
         }
     }
 
-    pub(crate) fn marshal_cbor<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<(), String> {
+    pub(crate) fn marshal_cbor<W: Write>(&self, encoder: &mut Encoder<W>) -> Result<(), Error> {
         match self {
             Type::Media(t) => {
-                encoder
-                    .str(t.as_ref())
-                    .or(Err("writing CBOR media type".to_string()))?;
+                encoder.str(t.as_ref()).or(Err(Error::CborEncode(
+                    "writing CBOR media type".to_string(),
+                )))?;
             }
             Type::CfNum(t) => {
                 encoder
                     .u16(*t)
-                    .or(Err("writing CBOR CF number".to_string()))?;
+                    .or(Err(Error::CborEncode("writing CBOR CF number".to_string())))?;
             }
             Type::TagNum(t) => {
                 encoder
                     .tag(Tag::new(*t))
-                    .or(Err("writing CBOR tag".to_string()))?;
+                    .or(Err(Error::CborEncode("writing CBOR tag".to_string())))?;
             }
         }
         Ok(())
@@ -134,7 +135,7 @@ impl<'de> Deserialize<'de> for Type {
 
             fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
             where
-                E: Error,
+                E: DeError,
             {
                 // Must validate media type syntax via `mime::Mime`.
                 match mime::Mime::from_str(v) {
@@ -145,7 +146,7 @@ impl<'de> Deserialize<'de> for Type {
 
             fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
             where
-                E: Error,
+                E: DeError,
             {
                 if v <= u16::MAX as u64 {
                     Ok(Type::CfNum(v as u16))
@@ -156,7 +157,7 @@ impl<'de> Deserialize<'de> for Type {
 
             fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
             where
-                E: Error,
+                E: DeError,
             {
                 Err(E::invalid_type(Unexpected::Float(v), &self))
             }

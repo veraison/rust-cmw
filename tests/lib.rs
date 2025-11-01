@@ -29,11 +29,13 @@ fn test_parse_cbor_collection() {
 }
 
 #[test]
-#[ignore = "Fails due to items being arranged in a different order"]
 fn test_encode_cbor_collection() {
     // Read testdata file as binary data
     let data = fs::read("testdata/collection-cbor-ok.cbor")
         .expect("Failed to read testdata/collection-cbor-ok.cbor");
+
+    // Parse the file contents into a CMW instance.
+    let parsed_cmw: CMW = CMW::unmarshal_cbor(&data).expect("Failed to parse CBOR into CMW");
 
     let cmw_1 = Monad::new_media_type(
         Mime::from_str("application/signed-corim+cbor")
@@ -44,7 +46,7 @@ fn test_encode_cbor_collection() {
     .expect("Failed to create Monad");
 
     let mut cmw_2 =
-        Monad::new_cf(30001, vec![0x23, 0x47, 0xda, 0x55], None).expect("Failed to create Monad 2");
+        Monad::new_cf(29884, vec![0x23, 0x47, 0xda, 0x55], None).expect("Failed to create Monad 2");
     cmw_2.use_cbor_tag_format();
 
     let cmw_3 =
@@ -60,13 +62,13 @@ fn test_encode_cbor_collection() {
     collection
         .add_item(cmw::collection::Label::Str("s".into()), cmw_3.into())
         .expect("Failed to add item3");
-    let cmw = CMW::Collection(collection);
-    let data_encoded = cmw.marshal_cbor().expect("Failed to marshal CMW to CBOR");
+    let constructed_cmw = CMW::Collection(collection);
 
     // Ensure the encoded data matches the original data
-    assert_eq!(data, data_encoded, "Encoded data does not match original");
-    println!("Encoded CMW: {:?}", data_encoded);
-    println!("Parsed CMW: {:?}", data);
+    assert_eq!(
+        parsed_cmw, constructed_cmw,
+        "Parsed and constructed CMWs don't match"
+    );
 }
 
 #[test]

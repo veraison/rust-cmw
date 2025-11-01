@@ -130,13 +130,13 @@ impl CMW {
         }
     }
 
-    pub(crate) fn unmarshal_from_decoder(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
+    pub(crate) fn unmarshal_from_cbor_decoder(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         // Decode the first byte to determine the type
         let start = decoder.input()[decoder.position()];
         if start_cbor_record(start) || start_cbor_tag(start) {
             Monad::unmarshal_from_cbor_decoder(decoder).map(|m| m.into())
         } else if start_cbor_collection(start) {
-            Collection::unmarshal_from_decoder(decoder).map(|c| c.into())
+            Collection::unmarshal_from_cbor_decoder(decoder).map(|c| c.into())
         } else {
             Err(Error::InvalidData(format!(
                 "want CBOR map, CBOR array or CBOR Tag start symbols, got: 0x{:02x}",
@@ -166,7 +166,7 @@ impl CMW {
 
 impl<'b> Decode<'b, ()> for CMW {
     fn decode(d: &mut Decoder<'b>, _ctx: &mut ()) -> Result<Self, minicbor::decode::Error> {
-        CMW::unmarshal_from_decoder(d).map_err(|e| {
+        CMW::unmarshal_from_cbor_decoder(d).map_err(|e| {
             minicbor::decode::Error::custom(Error::InvalidData(format!(
                 "Failed to decode CMW from bytes: {e}"
             )))

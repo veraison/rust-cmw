@@ -239,24 +239,8 @@ impl Monad {
 
     /// CBOR deserialization.
     pub fn unmarshal_cbor(b: &[u8]) -> Result<Self, Error> {
-        if b.is_empty() {
-            return Err(Error::InvalidData("empty buffer".into()));
-        }
-        let first = b[0];
-        if start_cbor_record(first) {
-            let mut decoder = Decoder::new(b);
-            // Decode array
-            Monad::unmarshal_record_from_cbor_decoder(&mut decoder)
-        } else if start_cbor_tag(first) {
-            let mut decoder = Decoder::new(b);
-            // Decode tag
-            Monad::unmarshal_tag_from_cbor_decoder(&mut decoder)
-        } else {
-            Err(Error::InvalidData(format!(
-                "want CBOR map, CBOR array or CBOR Tag start symbols, got: 0x{:02x}",
-                first
-            )))
-        }
+        let mut decoder = Decoder::new(b);
+        Self::unmarshal_from_cbor_decoder(&mut decoder)
     }
 
     pub(crate) fn unmarshal_from_cbor_decoder(decoder: &mut Decoder<'_>) -> Result<Self, Error> {

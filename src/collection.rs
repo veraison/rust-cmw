@@ -99,11 +99,17 @@ impl FromStr for Type {
 }
 
 /// The Collection structure.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Collection {
     cmap: BTreeMap<Label, CMW>,
     ctyp: Option<Type>,
     pub(crate) format: Option<Format>,
+}
+
+impl PartialEq for Collection {
+    fn eq(&self, other: &Self) -> bool {
+        self.ctyp == other.ctyp && self.cmap == other.cmap
+    }
 }
 
 impl Collection {
@@ -273,10 +279,10 @@ impl Collection {
     /// Deserialize from CBOR bytes.
     pub fn unmarshal_cbor(b: &[u8]) -> Result<Self, Error> {
         let mut decoder = Decoder::new(b);
-        Collection::unmarshal_from_decoder(&mut decoder)
+        Self::unmarshal_from_cbor_decoder(&mut decoder)
     }
 
-    pub(crate) fn unmarshal_from_decoder(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
+    pub(crate) fn unmarshal_from_cbor_decoder(decoder: &mut Decoder<'_>) -> Result<Self, Error> {
         let mut col = Collection::new(None, None)?;
         let _ = decoder
             .map()

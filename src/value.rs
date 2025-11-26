@@ -3,11 +3,10 @@
 
 //! Value wrapper around a byte vector, with base64‐URL‐safe JSON <-> byte[] mapping.
 
-use base64::Engine;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_cbor::{de::from_slice as cbor_from_slice, ser::to_vec as cbor_to_vec};
-
 use crate::cmw::Error;
+use base64::Engine;
+use minicbor_serde::{from_slice as cbor_from_slice, to_vec as cbor_to_vec};
+use serde_json::Value as JsonValue;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Value(pub(crate) Vec<u8>);
@@ -26,49 +25,42 @@ impl Value {
     }
 }
 
-// JSON: base64 URL‐safe encoding of the raw bytes.
-impl Serialize for Value {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&self.0);
-        serializer.serialize_str(&b64)
-    }
-}
-
-impl<'de> Deserialize<'de> for Value {
-    fn deserialize<D>(deserializer: D) -> Result<Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&s)
-            .map_err(serde::de::Error::custom)?;
-        if decoded.is_empty() {
-            Err(serde::de::Error::custom("empty value"))
-        } else {
-            Ok(Value(decoded))
-        }
-    }
-}
-
 impl Value {
     /// Helper to produce CBOR‐serialized value (raw bytes).
     pub fn to_cbor_bytes(&self) -> Result<Vec<u8>, Error> {
-        cbor_to_vec(&serde_cbor::Value::Bytes(self.0.clone()))
+        cbor_to_vec(self.0.clone())
             .map_err(|e| Error::CborEncode(format!("Failed to encode Value to CBOR: {e}")))
     }
 
     /// Helper to decode CBOR raw bytes into Value.
     pub fn from_cbor_bytes(b: &[u8]) -> Result<Self, Error> {
-        match cbor_from_slice::<serde_cbor::Value>(b) {
-            Ok(serde_cbor::Value::Bytes(v)) if !v.is_empty() => Ok(Value(v)),
+        match cbor_from_slice::<Vec<u8>>(b) {
+            Ok(v) if !v.is_empty() => Ok(Value(v)),
             Err(e) => Err(Error::CborDecode(format!(
                 "Failed to decode Value from CBOR: {e}"
             ))),
             _ => Err(Error::CborDecode("got wrong CBOR type".into())),
+        }
+    }
+
+    /// Helper to produce JSON‐serialized value (base64 URL‐safe string).
+    pub fn to_json_value(&self) -> Result<JsonValue, Error> {
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&self.0);
+        Ok(JsonValue::String(b64))
+    }
+
+    /// Helper to decode JSON base64 URL‐safe string into Value.
+    pub fn from_json_value(v: &JsonValue) -> Result<Self, Error> {
+        if let JsonValue::String(s) = v {
+            match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s) {
+                Ok(bytes) if !bytes.is_empty() => Ok(Value(bytes)),
+                Err(e) => Err(Error::InvalidData(format!(
+                    "Failed to decode Value from JSON: {e}"
+                ))),
+                _ => Err(Error::InvalidData("got empty byte array".into())),
+            }
+        } else {
+            Err(Error::InvalidData("got wrong JSON type".into()))
         }
     }
 }
@@ -76,16 +68,14 @@ impl Value {
 #[cfg(test)]
 mod tests {
     use super::Value;
-    use serde_json;
 
     #[test]
     fn test_value_json_roundtrip() {
         let raw = vec![0xde, 0xad, 0xbe, 0xef];
         let v = Value::new(raw.clone()).unwrap();
-        let s = serde_json::to_string(&v).unwrap();
-        // Base64 of deadbeef is '3q2-7w'
-        assert!(s.contains("3q2-7w"));
-        let d: Value = serde_json::from_str(&s).unwrap();
+        let json_value = v.to_json_value().unwrap();
+        assert_eq!(json_value, serde_json::Value::String("3q2-7w".into()));
+        let d = Value::from_json_value(&json_value).unwrap();
         assert_eq!(d, Value(raw));
     }
 

@@ -92,6 +92,7 @@ ignore = [
 allow = [
     "MIT",
     "Apache-2.0",
+    "BlueOak-1.0.0",
     "BSD-3-Clause",
     "ISC",
     "OpenSSL",

@@ -6,7 +6,7 @@ authors = ["Ionut Mihalcea <ionut.mihalcea@arm.com>"]
 homepage = "https://github.com/veraison/rust-cmw"
 repository = "https://github.com/veraison/rust-cmw"
 description = "Rust implementation of CMW"
-keywords = ["cmw", "ietf", "cbor", "json", "attestation", "rats"]
+keywords = ["cmw", "ietf", "cbor", "json", "attestation"]
 categories = [
     "os",
     "os::linux-apis",

@@ -2,6 +2,21 @@
 name = "cmw"
 version = "0.1.0"
 edition = "2021"
+authors = ["Ionut Mihalcea <ionut.mihalcea@arm.com>"]
+homepage = "https://github.com/veraison/rust-cmw"
+repository = "https://github.com/veraison/rust-cmw"
+description = "Rust implementation of CMW"
+keywords = ["cmw", "ietf", "cbor", "json", "attestation", "rats"]
+categories = [
+    "os",
+    "os::linux-apis",
+    "parsing",
+    "network-programming",
+    "hardware-support",
+]
+exclude = [".gitignore", ".github/*"]
+rust-version = "1.85.0"
+license = "Apache-2.0"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

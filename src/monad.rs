@@ -132,7 +132,7 @@ impl Monad {
         let tval = serde_json::to_value(&self.typ).map_err(Error::Json)?;
         arr.push(tval);
         // value
-        let vval = serde_json::to_value(&self.val).map_err(Error::Json)?;
+        let vval = self.val.to_json_value()?;
         arr.push(vval);
         // indicator if nonzero
         if let Some(ind) = self.ind {
@@ -162,7 +162,7 @@ impl Monad {
         // type
         let typ: Type = serde_json::from_value(arr[0].clone()).map_err(Error::Json)?;
         // value
-        let val: Value = serde_json::from_value(arr[1].clone()).map_err(Error::Json)?;
+        let val: Value = Value::from_json_value(&arr[1])?;
         let ind = if alen == 3 {
             let ind_num: u8 = serde_json::from_value(arr[2].clone()).map_err(Error::Json)?;
             Some(Indicator::from_bits_truncate(ind_num))

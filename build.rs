@@ -64,13 +64,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 current_tag.clear();
             }
-            Ok(XmlEvent::Characters(s)) => {
-                if in_content_formats_registry {
-                    match current_tag.as_str() {
-                        "contenttype" => content_type.push_str(&s),
-                        "id" => content_id.push_str(&s),
-                        _ => {}
-                    }
+            Ok(XmlEvent::Characters(s)) if in_content_formats_registry => {
+                match current_tag.as_str() {
+                    "contenttype" => content_type.push_str(&s),
+                    "id" => content_id.push_str(&s),
+                    _ => {}
                 }
             }
             Err(e) => {

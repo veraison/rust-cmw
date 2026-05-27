@@ -86,6 +86,14 @@ impl CMW {
         }
     }
 
+    /// Convert to [serde_json::Value]
+    pub fn to_json_value(&self) -> Result<serde_json::Value, Error> {
+        match self {
+            CMW::Monad(m) => m.to_json_value(),
+            CMW::Collection(c) => c.to_json_value(),
+        }
+    }
+
     /// Unmarshal from JSON.
     pub fn unmarshal_json(b: &[u8]) -> Result<Self, Error> {
         if b.is_empty() {
@@ -102,6 +110,19 @@ impl CMW {
                 start
             )))
         }
+    }
+
+    /// Construct using [serde_json::Value]
+    pub fn from_json_value(v: &serde_json::Value) -> Result<Self, Error> {
+        Ok(match v {
+            serde_json::Value::Array(_) => Self::Monad(Monad::from_json_value(v)?),
+            serde_json::Value::Object(_) => Self::Collection(Collection::from_json_value(v)?),
+            _ => {
+                return Err(Error::InvalidData(
+                    "json cmw is neither collection nor record".to_string(),
+                ))?
+            }
+        })
     }
 
     /// Marshal to CBOR.

@@ -50,6 +50,24 @@ impl fmt::Display for Label {
     }
 }
 
+impl From<&str> for Label {
+    fn from(val: &str) -> Self {
+        Self::Str(val.into())
+    }
+}
+
+impl From<String> for Label {
+    fn from(val: String) -> Self {
+        Self::Str(val)
+    }
+}
+
+impl From<u64> for Label {
+    fn from(val: u64) -> Self {
+        Self::Uint(val)
+    }
+}
+
 /// Meta entry (key + kind).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Meta {
@@ -374,7 +392,7 @@ mod tests {
     fn dummy_cmw_collection() -> CMW {
         let mut c =
             Collection::new(None, Some(Format::Json)).expect("failed to create dummy collection");
-        c.add_item(Label::Str("bar".into()), dummy_cmw())
+        c.add_item("bar".into(), dummy_cmw())
             .expect("failed to add monad to collection");
         c.into()
     }
@@ -458,10 +476,10 @@ mod tests {
         let mut collection =
             Collection::new(Some(type_), Some(Format::Json)).expect("Failed to create collection");
         collection
-            .add_item(Label::Str("item1".to_string()), dummy_cmw())
+            .add_item("item1".into(), dummy_cmw())
             .expect("Failed to add item");
         collection
-            .add_item(Label::Str("item2".to_string()), dummy_cmw_collection())
+            .add_item("item2".to_string().into(), dummy_cmw_collection())
             .expect("Failed to add item");
         // Marshal the collection to JSON bytes.
         let json_bytes = collection
@@ -481,10 +499,10 @@ mod tests {
         let mut collection =
             Collection::new(Some(type_), Some(Format::Cbor)).expect("Failed to create collection");
         collection
-            .add_item(Label::Str("item1".to_string()), dummy_cmw())
+            .add_item("item1".into(), dummy_cmw())
             .expect("Failed to add item");
         collection
-            .add_item(Label::Uint(42), dummy_cmw())
+            .add_item(42.into(), dummy_cmw())
             .expect("Failed to add item");
         // Marshal the collection to CBOR bytes.
         let cbor_bytes = collection

@@ -7,7 +7,7 @@ use crate::{
     cmw::Error,
     indicator::Indicator,
     r#type::Type,
-    utils::{start_cbor_record, start_cbor_tag, start_json_record},
+    utils::{start_cbor_record, start_cbor_tag},
     value::Value,
 };
 use mime::Mime;
@@ -147,12 +147,15 @@ impl Monad {
         if b.is_empty() {
             return Err(Error::InvalidData("empty buffer".into()));
         }
-        if !start_json_record(b[0]) {
-            return Err(Error::InvalidData(
-                "want JSON object or JSON array start symbols".into(),
-            ));
-        }
-        let arr: Vec<JsonValue> = serde_json::from_slice(b).map_err(Error::Json)?;
+        let v: JsonValue = serde_json::from_slice(b)?;
+        Self::from_json_value(&v)
+    }
+
+    /// Construct using [serde_json::Value]
+    pub fn from_json_value(v: &JsonValue) -> Result<Self, Error> {
+        let arr = v
+            .as_array()
+            .ok_or_else(|| Error::InvalidData("want monad to be a json record".into()))?;
         let alen = arr.len();
         if !(2..=3).contains(&alen) {
             return Err(Error::InvalidData(format!(
@@ -351,5 +354,37 @@ impl Monad {
             ind: None,
             format: Some(Format::CborTag),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn invalid_json_record() {
+        let vals = [
+            json!({"collection": ["monad.type/sample", "AAAA"]}),
+            json!([]),
+            json!(["monad.type/sample"]),
+            json!(["monad.type/sample", "AAAA", 4, "wrong"]),
+            json!(["monad.type/sample", "AAAA", "wrong"]),
+            json!(r#"["monad.type/sample", "AAAA"]"#),
+        ];
+        for (i, val) in vals.iter().enumerate() {
+            assert!(Monad::from_json_value(val).is_err(), "error at index {}", i);
+        }
+    }
+
+    #[test]
+    fn valid_json_record() {
+        let vals = [
+            serde_json::json!(["monad.type/sample", "AAAA"]),
+            serde_json::json!(["monad.type/sample", "AAAA", 4]),
+        ];
+        for (i, val) in vals.iter().enumerate() {
+            assert!(Monad::from_json_value(val).is_ok(), "error at index {}", i);
+        }
     }
 }

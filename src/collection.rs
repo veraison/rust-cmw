@@ -50,6 +50,24 @@ impl fmt::Display for Label {
     }
 }
 
+impl From<&str> for Label {
+    fn from(val: &str) -> Self {
+        Self::Str(val.into())
+    }
+}
+
+impl From<String> for Label {
+    fn from(val: String) -> Self {
+        Self::Str(val)
+    }
+}
+
+impl From<u64> for Label {
+    fn from(val: u64) -> Self {
+        Self::Uint(val)
+    }
+}
+
 /// Meta entry (key + kind).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Meta {
@@ -191,30 +209,44 @@ impl Collection {
 
     /// Serialize as JSON: object with string keys.
     pub fn marshal_json(&self) -> Result<Vec<u8>, Error> {
+        let val = self.to_json_value()?;
+        Ok(serde_json::to_vec(&val)?)
+    }
+
+    /// Convert to [serde_json::Value]
+    pub fn to_json_value(&self) -> Result<JsonValue, Error> {
         let mut map: JsonMap<String, JsonValue> = JsonMap::new();
         if let Some(ref c) = self.ctyp {
             map.insert("__cmwc_t".into(), JsonValue::String(c.to_string()));
         }
         for (k, v) in &self.cmap {
-            if let Label::Str(kstr) = k {
-                let vb = v.marshal_json()?;
-                let val = JsonValue::String(String::from_utf8(vb).map_err(|e| {
-                    Error::Unexpected(format!("converting nested CMW bytes to string: {}", e))
-                })?);
-                map.insert(kstr.clone(), val);
+            if let Label::Str(k) = k {
+                let v = v.to_json_value()?;
+                if !matches!(v, JsonValue::Array(_) | JsonValue::Object(_)) {
+                    Err(Error::Unexpected(
+                        "in collection, value is not a json-record or a json-collection"
+                            .to_string(),
+                    ))?;
+                }
+                map.insert(k.clone(), v);
             } else {
-                return Err(Error::InvalidData(
+                Err(Error::InvalidData(
                     "JSON collection, key error: want string".into(),
-                ));
+                ))?;
             }
         }
-        serde_json::to_vec(&map).map_err(Error::Json)
+        Ok(map.into())
     }
 
     /// Deserialize from JSON bytes.
     pub fn unmarshal_json(b: &[u8]) -> Result<Self, Error> {
         let raw: JsonValue = serde_json::from_slice(b).map_err(Error::Json)?;
-        let obj = raw
+        Self::from_json_value(&raw)
+    }
+
+    /// Construct using [serde_json::Value]
+    pub fn from_json_value(v: &JsonValue) -> Result<Self, Error> {
+        let obj = v
             .as_object()
             .ok_or_else(|| Error::InvalidData("want JSON object start".to_string()))?;
         let mut col = Collection::new(None, None)?;
@@ -227,11 +259,8 @@ impl Collection {
                     return Err(Error::InvalidData("invalid JSON collection type".into()));
                 }
             }
-            if let JsonValue::String(s) = val {
-                let cmw = CMW::unmarshal_json(s.as_bytes())?;
-                col.cmap.insert(Label::Str(key.clone()), cmw);
-                continue;
-            }
+            col.cmap
+                .insert(Label::Str(key.clone()), CMW::from_json_value(val)?);
         }
         col.format = Some(Format::Json);
         Ok(col)
@@ -360,6 +389,14 @@ mod tests {
             .into()
     }
 
+    fn dummy_cmw_collection() -> CMW {
+        let mut c =
+            Collection::new(None, Some(Format::Json)).expect("failed to create dummy collection");
+        c.add_item("bar".into(), dummy_cmw())
+            .expect("failed to add monad to collection");
+        c.into()
+    }
+
     #[test]
     fn test_validate_collection_type() {
         Type::validate("tag:example.com,2024:composite-attester").unwrap();
@@ -439,12 +476,16 @@ mod tests {
         let mut collection =
             Collection::new(Some(type_), Some(Format::Json)).expect("Failed to create collection");
         collection
-            .add_item(Label::Str("item1".to_string()), dummy_cmw())
+            .add_item("item1".into(), dummy_cmw())
+            .expect("Failed to add item");
+        collection
+            .add_item("item2".to_string().into(), dummy_cmw_collection())
             .expect("Failed to add item");
         // Marshal the collection to JSON bytes.
         let json_bytes = collection
             .marshal_json()
             .expect("Failed to marshal collection to JSON");
+        println!("{}", String::from_utf8(json_bytes.clone()).unwrap());
         // Unmarshal the JSON bytes back into a collection.
         let collection2 = Collection::unmarshal_json(&json_bytes)
             .expect("Failed to unmarshal JSON into collection");
@@ -458,10 +499,10 @@ mod tests {
         let mut collection =
             Collection::new(Some(type_), Some(Format::Cbor)).expect("Failed to create collection");
         collection
-            .add_item(Label::Str("item1".to_string()), dummy_cmw())
+            .add_item("item1".into(), dummy_cmw())
             .expect("Failed to add item");
         collection
-            .add_item(Label::Uint(42), dummy_cmw())
+            .add_item(42.into(), dummy_cmw())
             .expect("Failed to add item");
         // Marshal the collection to CBOR bytes.
         let cbor_bytes = collection
@@ -471,5 +512,33 @@ mod tests {
         let collection2 = Collection::unmarshal_cbor(&cbor_bytes)
             .expect("Failed to unmarshal CBOR into collection");
         assert_eq!(collection, collection2);
+    }
+
+    #[test]
+    fn test_json_string_invalid() {
+        let coll_as_string = r#"{"collection":["monad.type/sample","AAAA"]}"#;
+        let val_obj: serde_json::Value = serde_json::from_slice(coll_as_string.as_bytes()).unwrap();
+        let coll = Collection::from_json_value(&val_obj).unwrap();
+        let ser_coll = String::from_utf8(coll.marshal_json().unwrap()).unwrap();
+        assert_eq!(coll_as_string, ser_coll);
+
+        // check if passing the json object inside a json string fails
+        let val_str: serde_json::Value = serde_json::json!(coll_as_string);
+        assert!(Collection::from_json_value(&val_str).is_err())
+    }
+
+    #[test]
+    fn test_json_non_str_label() {
+        let mut collection = Collection::new(None, None).expect("Failed to create collection");
+        // integer label not allowed in json collection
+        collection
+            .add_item(42.into(), dummy_cmw())
+            .expect("Failed to add item");
+
+        let res = collection.marshal_json();
+        assert!(
+            matches!(res, Err(Error::InvalidData(_))),
+            "marshal json with non-string label should give error"
+        );
     }
 }

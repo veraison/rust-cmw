@@ -8,6 +8,7 @@ pub mod cmw;
 pub mod collection;
 pub mod indicator;
 pub mod monad;
+mod serde_support;
 pub mod tn;
 pub mod r#type;
 pub mod utils;

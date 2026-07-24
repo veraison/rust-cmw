@@ -195,9 +195,13 @@ impl Monad {
         encoder: &mut Encoder<W>,
     ) -> Result<(), Error> {
         match self.format {
-            Some(Format::CborRecord) | None => self.marshal_cbor_record_to_encoder(encoder),
+            // `Format::Json` is provenance metadata (the monad was parsed from
+            // JSON); it must not prevent CBOR encoding. A JSON monad has the same
+            // shape as a CBOR record, so encode it as one.
+            Some(Format::CborRecord | Format::Json) | None => {
+                self.marshal_cbor_record_to_encoder(encoder)
+            }
             Some(Format::CborTag) => self.marshal_cbor_tag_to_encoder(encoder),
-            _ => Err(Error::InvalidData("invalid format for monad".into())),
         }
     }
 

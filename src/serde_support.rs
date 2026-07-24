@@ -3,19 +3,23 @@
 
 //! Serde integration for [CMW](crate::CMW).
 //!
-//! CMW implements serde for human-readable (JSON) formats only, reusing
-//! [CMW::to_json_value] / [CMW::from_json_value]. This matches the `json-cmw`
-//! wire shapes in draft-ietf-rats-msg-wrap.
+//! CMW implements serde for both human-readable (JSON) and binary (CBOR)
+//! formats, reusing the crate's own codec so callers can embed a [CMW] in any
+//! `serde`-serialized structure without handling the two encodings themselves.
 //!
-//! CBOR is intentionally **not** supported through serde. The CBOR CMW profile
-//! relies on semantic tags (the Tag CMW form, CBOR major type 6), which have no
-//! representation in serde's data model — `minicbor_serde` cannot emit a tag and
-//! its `deserialize_any` rejects `Type::Tag`. Use [CMW::marshal_cbor] /
-//! [CMW::unmarshal_cbor] for CBOR instead. Non-human-readable (de)serializers
-//! therefore return an error.
+//! * Human-readable serializers (e.g. JSON) go through
+//!   [CMW::to_json_value] / [CMW::from_json_value], matching the `json-cmw`
+//!   wire shapes in draft-ietf-rats-msg-wrap.
+//! * Non-human-readable serializers (CBOR) go through
+//!   [CMW::marshal_cbor] / [CMW::unmarshal_cbor]. Because the CBOR CMW profile
+//!   relies on semantic tags (CBOR major type 6), which serde's data model
+//!   cannot represent directly, the native CBOR bytes are bridged into the
+//!   serde stream via [`ciborium::value::Value`], which faithfully carries
+//!   tags. This requires the surrounding CBOR (de)serializer to understand
+//!   ciborium's tag convention (as ciborium itself does).
 
 use crate::cmw::CMW;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 
 impl Serialize for CMW {
@@ -23,15 +27,16 @@ impl Serialize for CMW {
     where
         S: Serializer,
     {
-        if !serializer.is_human_readable() {
-            return Err(serde::ser::Error::custom(
-                "CMW serde supports human-readable formats (JSON) only; \
-                 use CMW::marshal_cbor for CBOR",
-            ));
+        if serializer.is_human_readable() {
+            self.to_json_value()
+                .map_err(S::Error::custom)?
+                .serialize(serializer)
+        } else {
+            let bytes = self.marshal_cbor().map_err(S::Error::custom)?;
+            let value: ciborium::value::Value =
+                ciborium::de::from_reader(bytes.as_slice()).map_err(S::Error::custom)?;
+            value.serialize(serializer)
         }
-        self.to_json_value()
-            .map_err(serde::ser::Error::custom)?
-            .serialize(serializer)
     }
 }
 
@@ -40,14 +45,15 @@ impl<'de> Deserialize<'de> for CMW {
     where
         D: Deserializer<'de>,
     {
-        if !deserializer.is_human_readable() {
-            return Err(serde::de::Error::custom(
-                "CMW serde supports human-readable formats (JSON) only; \
-                 use CMW::unmarshal_cbor for CBOR",
-            ));
+        if deserializer.is_human_readable() {
+            let v = JsonValue::deserialize(deserializer)?;
+            Self::from_json_value(&v).map_err(D::Error::custom)
+        } else {
+            let value = ciborium::value::Value::deserialize(deserializer)?;
+            let mut bytes: Vec<u8> = Vec::new();
+            ciborium::ser::into_writer(&value, &mut bytes).map_err(D::Error::custom)?;
+            Self::unmarshal_cbor(&bytes).map_err(D::Error::custom)
         }
-        let v = JsonValue::deserialize(deserializer)?;
-        Self::from_json_value(&v).map_err(serde::de::Error::custom)
     }
 }
 
@@ -81,13 +87,30 @@ mod tests {
     }
 
     #[test]
-    fn serde_cbor_is_rejected() {
-        // CBOR must go through marshal_cbor/unmarshal_cbor, not serde.
+    fn serde_cbor_monad_roundtrip() {
+        // CBOR now round-trips through serde, bridged via ciborium.
         let monad = Monad::new_cf(30001, vec![0x01, 0x02, 0x03], None).expect("monad");
         let cmw: CMW = monad.into();
-        assert!(minicbor_serde::to_vec(&cmw).is_err());
 
-        let bytes = cmw.marshal_cbor().expect("marshal_cbor");
-        assert!(minicbor_serde::from_slice::<CMW>(&bytes).is_err());
+        let mut buf: Vec<u8> = Vec::new();
+        ciborium::ser::into_writer(&cmw, &mut buf).expect("serialize CBOR");
+        let decoded: CMW = ciborium::de::from_reader(buf.as_slice()).expect("deserialize CBOR");
+        assert_eq!(cmw, decoded);
+
+        // The serde output must match the crate's native CBOR encoding.
+        assert_eq!(buf, cmw.marshal_cbor().expect("marshal_cbor"));
+    }
+
+    #[test]
+    fn serde_cbor_matches_json_source() {
+        // A CMW parsed from JSON (internal format = JSON) must still be
+        // CBOR-encodable through serde.
+        let cmw = CMW::from_json_value(&serde_json::json!(["application/vnd.example", "3q2-7w"]))
+            .expect("from_json_value");
+
+        let mut buf: Vec<u8> = Vec::new();
+        ciborium::ser::into_writer(&cmw, &mut buf).expect("serialize CBOR");
+        let decoded: CMW = ciborium::de::from_reader(buf.as_slice()).expect("deserialize CBOR");
+        assert_eq!(cmw, decoded);
     }
 }

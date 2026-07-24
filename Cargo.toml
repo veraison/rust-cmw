@@ -21,7 +21,7 @@ license = "Apache-2.0"
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-base64 = { version = "0.22", features = ["alloc"]}
+base64 = { version = "0.22", features = ["alloc"] }
 base64-serde = "0.8.0"
 iri-string = "0.7.8"
 regex = "1.9"
@@ -32,8 +32,9 @@ simple_asn1 = "0.6"
 mime = "0.3.17"
 hex = "0.4.3"
 lazy_static = "1.5.0"
-minicbor = { version = "1.0.0", features = ["std"]}
+minicbor = { version = "1.0.0", features = ["std"] }
 minicbor-serde = { version = "0.6.2", features = ["alloc"] }
+ciborium = "0.2"
 
 [build-dependencies]
 xml-rs = "0.8"

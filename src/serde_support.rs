@@ -9,7 +9,7 @@
 //!
 //! * Human-readable serializers (e.g. JSON) go through
 //!   [CMW::to_json_value] / [CMW::from_json_value], matching the `json-cmw`
-//!   wire shapes in draft-ietf-rats-msg-wrap.
+//!   wire shapes in RFC 9999.
 //! * Non-human-readable serializers (CBOR) go through
 //!   [CMW::marshal_cbor] / [CMW::unmarshal_cbor]. Because the CBOR CMW profile
 //!   relies on semantic tags (CBOR major type 6), which serde's data model
